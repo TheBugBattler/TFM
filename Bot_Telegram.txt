@@ -1,0 +1,35 @@
+#!/bin/bash
+TOKEN="INTRODUCIR TOKEN"
+CHAT_ID="INTRODUCIR CHAT"
+LOG_DIR="/var/log/shield"
+COOLDOWN=30 # segundos entre mensajes por IP+proto
+TEMP_FILE="/tmp/shield_alerts.tmp"
+touch "$TEMP_FILE"
+send_alert() {
+  mensaje="$1"
+  echo "[DEBUG] Enviando alerta: $mensaje"
+  curl -s -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" \
+    -d "chat_id=$CHAT_ID" \
+    -d "text=$mensaje" > /dev/null
+}
+LOG_FILE="$LOG_DIR/shield-$(date +%Y%m%d).log"
+echo "[DEBUG] Monitorizando archivo: $LOG_FILE"
+tail -n0 -F "$LOG_FILE" | while read -r line; do
+  echo "[DEBUG] Línea nueva detectada: $line"
+  fecha=$(echo "$line" | cut -d';' -f1)
+  src_ip=$(echo "$line" | cut -d';' -f2)
+  src_port=$(echo "$line" | cut -d';' -f3)
+  dst_ip=$(echo "$line" | cut -d';' -f4)
+  dst_port=$(echo "$line" | cut -d';' -f5)
+  proto=$(echo "$line" | cut -d';' -f6)
+
+  clave="${src_ip}:${proto}"
+  ahora=$(date +%s)
+  ultimo=$(grep "$clave" "$TEMP_FILE" | tail -n 1 | cut -d' ' -f2)
+  if [[ -z "$ultimo" ]] || (( ahora - ultimo > COOLDOWN )); then
+    mensaje="🛡️ DROP detectado: $src_ip:$src_port → $dst_ip:$dst_port Protocolo: $proto Hora: $fecha"
+    send_alert "$mensaje"
+    grep -v "$clave" "$TEMP_FILE" > "$TEMP_FILE.tmp" && mv "$TEMP_FILE.tmp" "$TEMP_FILE"
+    echo "$clave $ahora" >> "$TEMP_FILE"
+  fi
+done
